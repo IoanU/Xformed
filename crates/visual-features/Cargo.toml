@@ -1,0 +1,9 @@
+[package]
+name = "visual-features"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+image = { version = "0.25", features = ["png", "jpeg"] }
+palette = "0.7"

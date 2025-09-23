@@ -1,0 +1,9 @@
+[package]
+name = "audio-features"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+symphonia = { version = "0.5", features = ["mp3", "flac", "aac", "isomp4", "wav"] }
+rustfft = "6"

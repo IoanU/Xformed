@@ -1,0 +1,10 @@
+[package]
+name = "melody-synth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+hound = "3"
+melody-core = { path = "../melody-core" }
