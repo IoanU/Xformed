@@ -1,4 +1,4 @@
-# Xformed 🎶✨
+# Xformed
 
 A creative transformation tool that converts between **text, audio, and images** using rule-based feature extraction and procedural synthesis.  
 The project demonstrates how semantic and structural features (sentiment, color, spectral statistics, etc.) can be mapped into musical or visual domains.
