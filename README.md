@@ -110,6 +110,7 @@ Global options:
 ```
 Xformed/
 ├── Cargo.toml                 # Workspace manifest
+├── Cargo.lock                 # Ensures reproductible builds
 ├── crates/
 │   ├── audio-features/        # Extracts audio metrics
 │   ├── text-features/         # Extracts text metrics
@@ -119,5 +120,7 @@ Xformed/
 │   ├── converters/            # Cross-modal converters
 │   ├── api/                   # Optional Axum HTTP API
 │   └── xformed-cli/           # CLI frontend
-├── examples/                  # Sample images / results (kept in repo)
-└── outputs/                   # Generated artifacts (ignored or local)
+├── outputs/                   # Generated artifacts (ignored or local)
+├── inputs/                    # Pre-selected files meant to be examples
+├── services/api               # API integration
+└── README.md                  # README file
