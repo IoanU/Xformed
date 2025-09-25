@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = "1"
 image = { version = "0.25", features = ["png", "jpeg"] }
 palette = "0.7"
+imageproc = "0.25"
+serde = { version="1", features=["derive"] }

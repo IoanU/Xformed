@@ -7,5 +7,7 @@ edition = "2021"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 base64 = "0.22"
-converters = { path = "../converters" }
 serde_json = "1"
+
+# local crate
+converters = { path = "../converters" }

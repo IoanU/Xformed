@@ -1,33 +1,49 @@
 use anyhow::{Context, Result};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use clap::{Parser, Subcommand};
-use converters::{TransformOpts, InputPayload, ConvertRequest, handle_convert};
+use converters::{
+    handle_convert, ConvertRequest, InputPayload, OutputArtifact, TransformOpts,
+};
 use std::fs;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
-use base64::Engine;
+use std::path::PathBuf;
 
+/// Xformed CLI – run conversions without HTTP.
 #[derive(Parser, Debug)]
-#[command(name="xformed", version, about="Xformed CLI - run conversions without HTTP")]
+#[command(name="xformed", version, about="Xformed CLI – text/image/audio conversions & feature dumps")]
 struct Cli {
     /// Output directory (default: ./outputs)
     #[arg(long, global=true, default_value="outputs")]
     out_dir: PathBuf,
 
-    /// Instrument for audio (sine|saw|square)
-    #[arg(long, default_value="saw")]
-    instrument: String,
+    /// Instrument: sine|saw|square|auto
+    #[arg(long, global=true)]
+    instrument: Option<String>,
 
-    /// Mood (auto|major|minor)
-    #[arg(long, default_value="auto")]
-    mood: String,
-
-    /// Tempo BPM (optional)
-    #[arg(long)]
+    /// Tempo BPM (auto if omitted)
+    #[arg(long, global=true)]
     tempo: Option<u32>,
 
-    /// Jumpiness 0..1
-    #[arg(long, default_value_t=0.25)]
-    jumpiness: f32,
+    /// Mood: major|minor|auto
+    #[arg(long, global=true, default_value="auto")]
+    mood: String,
+
+    /// Jumpiness 0..1 (interval leaps)
+    #[arg(long, global=true)]
+    jumpiness: Option<f32>,
+
+    /// Root MIDI note (e.g., 60 = C4). If omitted, auto.
+    #[arg(long, global=true)]
+    root_midi: Option<i32>,
+
+    /// Bars (approximate length). Default: 2
+    #[arg(long, global=true)]
+    bars: Option<u32>,
+
+    /// Seed (reserved – for future deterministic variation)
+    #[arg(long, global=true)]
+    seed: Option<u64>,
 
     #[command(subcommand)]
     cmd: Commands,
@@ -37,137 +53,165 @@ struct Cli {
 enum Commands {
     /// Convert free-typed text into audio (melody)
     TextToAudio {
-        /// Text to transform; if omitted, you'll be prompted to type it
+        /// Text to transform. If omitted, read from STDIN.
         #[arg(long)]
         text: Option<String>,
     },
-    /// Convert an image file (png/jpg) into audio (melody)
+
+    /// Convert an image file into audio
     ImageToAudio {
-        /// Path to image file
-        path: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+    },
+
+    /// Analyze audio file and dump JSON features
+    AudioFeatures {
+        #[arg(long)]
+        input: PathBuf,
+    },
+
+    /// Analyze text and dump JSON features
+    TextFeatures {
+        #[arg(long)]
+        text: Option<String>,
+    },
+
+    /// Analyze image file and dump JSON features
+    ImageFeatures {
+        #[arg(long)]
+        input: PathBuf,
     },
 }
 
-fn ensure_out_dir(p: &Path) -> Result<()> {
-    if !p.exists() {
-        fs::create_dir_all(p).with_context(|| format!("create out dir {}", p.display()))?;
+fn opts_from_cli(cli: &Cli) -> TransformOpts {
+    TransformOpts {
+        instrument: cli.instrument.clone(),
+        tempo: cli.tempo,
+        mood: Some(cli.mood.clone()),
+        jumpiness: cli.jumpiness,
+        root_midi: cli.root_midi,
+        bars: cli.bars,
+        seed: cli.seed,
     }
-    Ok(())
 }
 
-fn write_b64(path: &Path, b64: &str) -> Result<()> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .context("decode base64")?;
-    fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
+fn write_artifacts(out_dir: &PathBuf, prefix: &str, artifacts: &[OutputArtifact]) -> Result<()> {
+    fs::create_dir_all(out_dir).ok();
+
+    for (i, art) in artifacts.iter().enumerate() {
+        match art {
+            OutputArtifact::WavBase64 { data_b64 } => {
+                let bytes = B64.decode(data_b64)?;
+                let p = out_dir.join(format!("{}_{}.wav", prefix, i));
+                fs::write(&p, bytes)?;
+                eprintln!("✓ wrote {}", p.display());
+            }
+            OutputArtifact::MidiJsonBase64 { data_b64 } => {
+                let bytes = B64.decode(data_b64)?;
+                let p = out_dir.join(format!("{}_{}.midi.json", prefix, i));
+                fs::write(&p, bytes)?;
+                eprintln!("✓ wrote {}", p.display());
+            }
+            OutputArtifact::Json { data } => {
+                let p = out_dir.join(format!("{}_{}.json", prefix, i));
+                fs::write(&p, serde_json::to_string_pretty(data)?)?;
+                eprintln!("✓ wrote {}", p.display());
+            }
+        }
+    }
     Ok(())
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    ensure_out_dir(&cli.out_dir)?;
-
-    let opts = TransformOpts {
-        instrument: Some(cli.instrument.clone()),
-        tempo: cli.tempo,
-        mood: Some(cli.mood.clone()),
-        jumpiness: Some(cli.jumpiness),
-    };
+    let opts = opts_from_cli(&cli);
 
     match cli.cmd {
         Commands::TextToAudio { text } => {
-            let t = match text {
-                Some(s) => s,
+            let txt = match text {
+                Some(t) => t,
                 None => {
-                    eprintln!("Scrie textul și apasă Enter (Ctrl+Z apoi Enter ca să închei multi-linie pe Windows):");
                     let mut buf = String::new();
-                    io::stdin().read_to_string(&mut buf)?;
-                    if buf.trim().is_empty() {
-                        eprintln!("(hint) Poți folosi și: xformed text-to-audio --text \"fraza ta\"");
-                        anyhow::bail!("nu am primit text");
-                    }
+                    io::stdin()
+                        .read_to_string(&mut buf)
+                        .context("failed reading STDIN")?;
                     buf
                 }
             };
-
             let req = ConvertRequest {
-                from: "text".to_string(),
-                to: "audio".to_string(),
+                from: "text".into(),
+                to: "audio".into(),
                 options: opts,
-                payload: InputPayload::Text { text: t },
+                payload: InputPayload::Text { text: txt },
             };
             let resp = handle_convert(req)?;
-
-            let mut saved = 0usize;
-            for art in resp.artifacts {
-                match art {
-                    converters::OutputArtifact::WavBase64 { data_b64 } => {
-                        let p = cli.out_dir.join("out.wav");
-                        write_b64(&p, &data_b64)?;
-                        println!("WAV  -> {}", p.display());
-                        saved += 1;
-                    }
-                    converters::OutputArtifact::MidiBase64 { data_b64 } => {
-                        let p = cli.out_dir.join("out.mid");
-                        write_b64(&p, &data_b64)?;
-                        println!("MIDI -> {}", p.display());
-                        saved += 1;
-                    }
-                    converters::OutputArtifact::Json { data } => {
-                        let p = cli.out_dir.join("response.json");
-                        fs::write(&p, serde_json::to_string_pretty(&data)?)?;
-                        println!("JSON -> {}", p.display());
-                    }
-                    converters::OutputArtifact::PngBase64 { data_b64 } => {
-                        let p = cli.out_dir.join("out.png");
-                        write_b64(&p, &data_b64)?;
-                        println!("PNG  -> {}", p.display());
-                        saved += 1;
-                    }
-                }
-            }
-            if saved == 0 {
-                anyhow::bail!("nu am primit WAV/MIDI/PNG în răspuns");
-            }
+            write_artifacts(&cli.out_dir, "out_from_text", &resp.artifacts)?;
         }
-        Commands::ImageToAudio { path } => {
-            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
 
+        Commands::ImageToAudio { input } => {
+            let bytes = fs::read(&input)
+                .with_context(|| format!("failed reading {:?}", input.display()))?;
             let req = ConvertRequest {
-                from: "image".to_string(),
-                to: "audio".to_string(),
+                from: "image".into(),
+                to: "audio".into(),
                 options: opts,
-                payload: InputPayload::ImageBase64 { data_b64: b64 },
+                payload: InputPayload::ImageBase64 {
+                    data_b64: B64.encode(bytes),
+                },
             };
             let resp = handle_convert(req)?;
+            write_artifacts(&cli.out_dir, "out_from_image", &resp.artifacts)?;
+        }
 
-            let mut saved = 0usize;
-            for art in resp.artifacts {
-                match art {
-                    converters::OutputArtifact::WavBase64 { data_b64 } => {
-                        let p = cli.out_dir.join("out_from_image.wav");
-                        write_b64(&p, &data_b64)?;
-                        println!("WAV  -> {}", p.display());
-                        saved += 1;
-                    }
-                    converters::OutputArtifact::MidiBase64 { data_b64 } => {
-                        let p = cli.out_dir.join("out_from_image.mid");
-                        write_b64(&p, &data_b64)?;
-                        println!("MIDI -> {}", p.display());
-                        saved += 1;
-                    }
-                    converters::OutputArtifact::Json { data } => {
-                        let p = cli.out_dir.join("response.json");
-                        fs::write(&p, serde_json::to_string_pretty(&data)?)?;
-                        println!("JSON -> {}", p.display());
-                    }
-                    _ => {}
+        Commands::AudioFeatures { input } => {
+            let bytes = fs::read(&input)
+                .with_context(|| format!("failed reading {:?}", input.display()))?;
+            let req = ConvertRequest {
+                from: "audio".into(),
+                to: "json".into(),
+                options: opts,
+                payload: InputPayload::AudioBase64 {
+                    data_b64: B64.encode(bytes),
+                },
+            };
+            let resp = handle_convert(req)?;
+            write_artifacts(&cli.out_dir, "features_audio", &resp.artifacts)?;
+        }
+
+        Commands::TextFeatures { text } => {
+            let txt = match text {
+                Some(t) => t,
+                None => {
+                    let mut buf = String::new();
+                    io::stdin()
+                        .read_to_string(&mut buf)
+                        .context("failed reading STDIN")?;
+                    buf
                 }
-            }
-            if saved == 0 {
-                anyhow::bail!("nu am primit WAV/MIDI în răspuns");
-            }
+            };
+            let req = ConvertRequest {
+                from: "text".into(),
+                to: "json".into(),
+                options: opts,
+                payload: InputPayload::Text { text: txt },
+            };
+            let resp = handle_convert(req)?;
+            write_artifacts(&cli.out_dir, "features_text", &resp.artifacts)?;
+        }
+
+        Commands::ImageFeatures { input } => {
+            let bytes = fs::read(&input)
+                .with_context(|| format!("failed reading {:?}", input.display()))?;
+            let req = ConvertRequest {
+                from: "image".into(),
+                to: "json".into(),
+                options: opts,
+                payload: InputPayload::ImageBase64 {
+                    data_b64: B64.encode(bytes),
+                },
+            };
+            let resp = handle_convert(req)?;
+            write_artifacts(&cli.out_dir, "features_image", &resp.artifacts)?;
         }
     }
 

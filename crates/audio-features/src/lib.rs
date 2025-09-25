@@ -1,237 +1,324 @@
+// crates/audio-features/src/lib.rs
+pub mod decode;
+pub use decode::decode_wav_to_mono_f32;
 
+use serde::{Serialize, Deserialize};
 use anyhow::Result;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::errors::Error;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::default::{get_codecs, get_probe};
 
-/// Decode common audio formats (wav/mp3/flac/aac in mp4) to mono f32 samples and sample rate.
-pub fn decode_to_mono(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
-    let cursor = std::io::Cursor::new(bytes.to_vec());
-    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct F0Stats {
+    pub mean_hz: f32,
+    pub std_hz: f32,
+    pub voiced_ratio: f32, // [0,1]
+}
 
-    // Provide no hints.
-    let hint = Hint::new();
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioFeatures {
+    // Amplitude
+    pub rms: f32,
+    pub peak: f32,
+    pub crest_factor: f32,
 
-    // Use the default probe to guess format.
-    let probed = get_probe().format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
-    let mut format = probed.format;
+    // Time-domain
+    pub zcr: f32,              // zero-crossings/sec
+    pub onset_rate: f32,       // onsets/sec
+    pub tempo_bpm: f32,
 
-    // Get the default audio track; clone codec params to build the decoder.
-    let track = format.default_track().ok_or_else(|| anyhow::anyhow!("no default track"))?;
-    let track_id = track.id;
-    let codec_params = track.codec_params.clone();
+    // Spectral (frame-avg)
+    pub spectral_centroid_hz: f32,
+    pub spectral_rolloff85_hz: f32,
+    pub spectral_rolloff95_hz: f32,
+    pub spectral_flatness: f32, // [0,1] ~ geometric/arith mean
+    pub spectral_bandwidth_hz: f32,
+    pub spectral_entropy: f32,   // [0,1]
 
-    // Create a decoder.
-    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
+    // Amplitude entropy
+    pub amplitude_entropy: f32,  // [0,1]
 
-    let mut out = Vec::<f32>::new();
-    let mut sr = 44_100u32;
+    // F0 (YIN-lite)
+    pub f0: F0Stats,
+}
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(Error::IoError(_)) => break,
-            Err(Error::ResetRequired) => break, // stream reset not handled in MVP
-            Err(_) => break,
-        };
+pub struct FeatureExtractor {
+    pub target_sr: u32,     // e.g. 22050
+    pub frame_size: usize,  // e.g. 2048
+    pub hop_size: usize,    // e.g. 512
+}
 
-        if packet.track_id() != track_id {
-            continue;
+impl FeatureExtractor {
+    pub fn new(target_sr: u32, frame_size: usize, hop_size: usize) -> Self {
+        Self { target_sr, frame_size, hop_size }
+    }
+
+    /// Dacă ai deja decode → mono f32 @sr, folosește direct asta.
+    pub fn analyze_mono(&self, mono: &[f32], sr: u32) -> Result<AudioFeatures> {
+        use rustfft::{FftPlanner, num_complex::Complex};
+        use anyhow::bail;
+
+        if mono.is_empty() || sr == 0 { bail!("empty signal"); }
+
+        // 1) Basic amp stats
+        let mut sum2 = 0.0f64;
+        let mut peak = 0.0f32;
+        for &x in mono { 
+            let ax = x.abs();
+            if ax > peak { peak = ax; }
+            sum2 += (x as f64)*(x as f64);
+        }
+        let rms = (sum2 / mono.len() as f64).sqrt() as f32;
+        let crest = if rms > 0.0 { peak / rms } else { 0.0 };
+
+        // 2) ZCR (per sec)
+        let mut zc = 0usize;
+        for w in mono.windows(2) {
+            let (a,b) = (w[0], w[1]);
+            if (a >= 0.0 && b < 0.0) || (a < 0.0 && b >= 0.0) { zc += 1; }
+        }
+        let zcr = (zc as f32) * (sr as f32) / (mono.len().saturating_sub(1).max(1) as f32);
+
+        // Framing
+        let n = mono.len();
+        let fs = self.frame_size;
+        let hop = self.hop_size;
+        let n_frames = if n < fs { 0 } else { 1 + (n - fs)/hop };
+        if n_frames == 0 {
+            return Ok(AudioFeatures {
+                rms, peak, crest_factor: crest, zcr,
+                onset_rate: 0.0, tempo_bpm: 0.0,
+                spectral_centroid_hz: 0.0, spectral_rolloff85_hz: 0.0,
+                spectral_rolloff95_hz: 0.0, spectral_flatness: 0.0,
+                spectral_bandwidth_hz: 0.0, spectral_entropy: 0.0,
+                amplitude_entropy: 0.0,
+                f0: F0Stats{mean_hz:0.0,std_hz:0.0,voiced_ratio:0.0},
+            });
         }
 
-        match decoder.decode(&packet) {
-            Ok(audio_buf) => {
-                sr = audio_buf.spec().rate;
-                let chans = audio_buf.spec().channels.count();
+        // Hann window
+        let mut window = vec![0.0f32; fs];
+        for i in 0..fs {
+            window[i] = 0.5 - 0.5 * (2.0*std::f32::consts::PI*(i as f32)/(fs as f32)).cos();
+        }
 
-                // Copy samples into a contiguous f32 buffer.
-                let mut sample_buf = SampleBuffer::<f32>::new(audio_buf.capacity() as u64, *audio_buf.spec());
-                sample_buf.copy_interleaved_ref(audio_buf);
+        // FFT
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(fs);
+        let bin2hz = |k: usize| (k as f32) * (sr as f32) / (fs as f32);
 
-                let samples = sample_buf.samples();
-                if chans == 1 {
-                    out.extend_from_slice(samples);
-                } else {
-                    // Mixdown to mono.
-                    for frame in samples.chunks_exact(chans) {
-                        let mut acc = 0.0f32;
-                        for &s in frame { acc += s; }
-                        out.push(acc / chans as f32);
-                    }
+        let mut centroid_sum = 0.0f64;
+        let mut roll85_sum = 0.0f64;
+        let mut roll95_sum = 0.0f64;
+        let mut flatness_sum = 0.0f64;
+        let mut bandwidth_sum = 0.0f64;
+        let mut spec_entropy_sum = 0.0f64;
+
+        // Onset (spectral flux)
+        let mut prev_mag = vec![0.0f32; fs/2+1];
+        let mut flux_vals = Vec::with_capacity(n_frames);
+
+        for fi in 0..n_frames {
+            let start = fi*hop;
+            let frame = &mono[start..start+fs];
+
+            // Window + copy to complex buffer
+            let mut buf: Vec<Complex<f32>> = frame.iter()
+                .zip(&window)
+                .map(|(x,w)| Complex{ re: x*w, im: 0.0 })
+                .collect();
+
+            fft.process(&mut buf);
+
+            // Power spectrum (one-sided)
+            let mut mag = vec![0.0f32; fs/2+1];
+            for k in 0..=fs/2 {
+                let c = buf[k];
+                mag[k] = (c.re*c.re + c.im*c.im).sqrt();
+            }
+
+            // Spectral centroid / bandwidth (weighted by magnitude)
+            let mut wsum = 0.0f64;
+            let mut ksum = 0.0f64;
+            for k in 0..=fs/2 {
+                let m = mag[k] as f64;
+                wsum += m;
+                ksum += m * (k as f64);
+            }
+            let centroid_bin = if wsum>0.0 { ksum/wsum } else { 0.0 };
+            let centroid_hz = centroid_bin as f32 * (sr as f32)/(fs as f32);
+            centroid_sum += centroid_hz as f64;
+
+            // Bandwidth (2nd central moment around centroid)
+            let mut var = 0.0f64;
+            for k in 0..=fs/2 {
+                let m = mag[k] as f64;
+                let d = (k as f64) - centroid_bin;
+                var += m * d*d;
+            }
+            let bw_bin = if wsum>0.0 { (var/wsum).sqrt() } else { 0.0 };
+            let bw_hz = bw_bin as f32 * (sr as f32)/(fs as f32);
+            bandwidth_sum += bw_hz as f64;
+
+            // Rolloff (85%, 95%)
+            let mut csum = 0.0f64;
+            let total: f64 = mag.iter().map(|&m| m as f64).sum();
+            let thr85 = 0.85 * total;
+            let thr95 = 0.95 * total;
+            let mut r85 = 0usize;
+            let mut r95 = 0usize;
+            if total > 0.0 {
+                for k in 0..=fs/2 {
+                    csum += mag[k] as f64;
+                    if r85==0 && csum>=thr85 { r85 = k; }
+                    if r95==0 && csum>=thr95 { r95 = k; break; }
                 }
             }
-            Err(Error::DecodeError(_)) => {
-                // Recoverable decode error, skip packet.
-                continue;
+            roll85_sum += bin2hz(r85) as f64;
+            roll95_sum += bin2hz(r95) as f64;
+
+            // Flatness (geo/arith)
+            let eps = 1e-12f64;
+            let geo = mag.iter().fold(0.0f64, |acc, &m| acc + (m as f64 + eps).ln());
+            let geo = (geo / (mag.len() as f64)).exp();
+            let arith = (total + eps) / (mag.len() as f64);
+            let flat = (geo/arith).clamp(0.0, 1.0);
+            flatness_sum += flat;
+
+            // Spectral entropy (normalize to pmf, H/logN)
+            let mut p = vec![0.0f64; mag.len()];
+            let total_p: f64 = mag.iter().map(|&m| m as f64).sum::<f64>() + eps;
+            for (i,&m) in mag.iter().enumerate() {
+                p[i] = (m as f64) / total_p;
             }
-            Err(e) => return Err(anyhow::anyhow!(e)),
-        }
-    }
+            let h = -p.iter().map(|&pi| if pi>0.0 { pi*(pi.ln()) } else { 0.0 }).sum::<f64>();
+            let h_norm = (h / (mag.len() as f64).ln()).clamp(0.0, 1.0);
+            spec_entropy_sum += h_norm;
 
-    Ok((out, sr))
-}
-
-/// Compute frame indices (start) for a signal given window and hop sizes.
-fn frames_indices(len: usize, win: usize, hop: usize) -> impl Iterator<Item=usize> {
-    (0..).map(move |i| i*hop).take_while(move |&s| s + win <= len)
-}
-
-/// Hann window
-fn hann(n: usize) -> Vec<f32> {
-    let mut w = vec![0f32; n];
-    let c = std::f32::consts::PI * 2.0 / (n as f32);
-    for i in 0..n { w[i] = 0.5 - 0.5 * (c * (i as f32)).cos(); }
-    w
-}
-
-/// Spectral flux (for onset detection) using rustfft.
-pub fn spectral_flux(samples: &[f32], _sr: u32, win: usize, hop: usize) -> Vec<f32> {
-    use rustfft::{FftPlanner, num_complex::Complex32};
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(win);
-    let window = hann(win);
-    let mut prev_mag: Vec<f32> = vec![0.0; win];
-    let mut flux: Vec<f32> = Vec::new();
-
-    let mut buf: Vec<Complex32> = vec![Complex32::new(0.0, 0.0); win];
-    for start in frames_indices(samples.len(), win, hop) {
-        for i in 0..win {
-            let s = samples[start + i] * window[i];
-            buf[i] = Complex32::new(s, 0.0);
-        }
-        fft.process(&mut buf);
-        // magnitude spectrum
-        let mut sum_pos = 0.0f32;
-        for i in 0..(win/2) {
-            let m = (buf[i].re * buf[i].re + buf[i].im * buf[i].im).sqrt();
-            let d = (m - prev_mag[i]).max(0.0);
-            sum_pos += d;
-            prev_mag[i] = m;
-        }
-        flux.push(sum_pos);
-    }
-    // normalize
-    let maxv = flux.iter().cloned().fold(0.0f32, f32::max).max(1e-9);
-    for v in &mut flux { *v /= maxv; }
-    flux
-}
-
-/// Simple peak picking on spectral flux to get onset times (seconds).
-pub fn onset_times(samples: &[f32], sr: u32, win: usize, hop: usize, thresh: f32) -> Vec<f32> {
-    let flux = spectral_flux(samples, sr, win, hop);
-    let mut times = Vec::new();
-    let mut i = 1usize;
-    while i + 1 < flux.len() {
-        if flux[i] > thresh && flux[i] > flux[i-1] && flux[i] > flux[i+1] {
-            let t = ((i * hop + win/2) as f32) / sr as f32;
-            times.push(t);
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
-    times
-}
-
-/// YIN difference function for a frame.
-fn yin_diff(frame: &[f32], tau_max: usize) -> Vec<f32> {
-    let n = frame.len();
-    let mut d = vec![0f32; tau_max+1];
-    for tau in 1..=tau_max {
-        let mut sum = 0f32;
-        for i in 0..(n - tau) {
-            let diff = frame[i] - frame[i+tau];
-            sum += diff * diff;
-        }
-        d[tau] = sum;
-    }
-    d
-}
-
-/// Cumulative mean normalized difference (CMND) of YIN.
-fn yin_cmnd(d: &[f32]) -> Vec<f32> {
-    let mut cmnd = vec![0f32; d.len()];
-    let mut running_sum = 0f32;
-    cmnd[0] = 1.0;
-    for tau in 1..d.len() {
-        running_sum += d[tau];
-        cmnd[tau] = if running_sum > 0.0 { d[tau] * (tau as f32) / running_sum } else { 1.0 };
-    }
-    cmnd
-}
-
-/// Estimate f0 for one frame with YIN. Returns (f0 Hz, confidence) or None.
-fn yin_f0_frame(frame: &[f32], sr: u32, fmin: f32, fmax: f32, thresh: f32) -> Option<(f32, f32)> {
-    let tau_min = (sr as f32 / fmax) as usize;
-    let tau_max = (sr as f32 / fmin) as usize;
-    if tau_max + 1 >= frame.len() { return None; }
-
-    let d = yin_diff(frame, tau_max);
-    let cmnd = yin_cmnd(&d);
-
-    // find first minimum below threshold
-    let mut tau = None;
-    for t in tau_min..=tau_max {
-        if cmnd[t] < thresh {
-            // parabolic interpolation around t to refine
-            let t0 = (t as isize - 1).max(1) as usize;
-            let t2 = (t + 1).min(tau_max);
-            let a = cmnd[t0];
-            let b = cmnd[t];
-            let c = cmnd[t2];
-            let denom = a - 2.0*b + c;
-            let mut t_adj = t as f32;
-            if denom.abs() > 1e-9 {
-                t_adj = t as f32 + 0.5 * (a - c) / denom;
+            // Flux (ReLU of mag diff)
+            let mut flux = 0.0f32;
+            for k in 0..mag.len() {
+                let d = (mag[k] - prev_mag[k]).max(0.0);
+                flux += d;
             }
-            tau = Some((t_adj, 1.0 - b));
-            break;
+            flux_vals.push(flux);
+            prev_mag = mag;
         }
-    }
-    tau.map(|(t_adj, conf)| ((sr as f32) / t_adj.max(1.0), conf.clamp(0.0, 1.0)))
-}
 
-/// Track monophonic f0 across the whole signal (frame-wise). Returns (times_sec, f0_hz, confidence) vectors.
-pub fn yin_track(samples: &[f32], sr: u32, win: usize, hop: usize, fmin: f32, fmax: f32, thresh: f32) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
-    let mut times = Vec::new();
-    let mut f0s = Vec::new();
-    let mut confs = Vec::new();
-    let mut frame = vec![0f32; win];
-    let w = hann(win);
-
-    for start in frames_indices(samples.len(), win, hop) {
-        for i in 0..win { frame[i] = samples[start + i] * w[i]; }
-        let center = (start + win/2) as f32 / sr as f32;
-        if let Some((f0, conf)) = yin_f0_frame(&frame, sr, fmin, fmax, thresh) {
-            times.push(center);
-            f0s.push(f0);
-            confs.push(conf);
-        } else {
-            times.push(center);
-            f0s.push(0.0);
-            confs.push(0.0);
+        // Onset rate (pe sec): prag adaptiv pe flux
+        let mean_flux = if !flux_vals.is_empty() {
+            flux_vals.iter().sum::<f32>() / (flux_vals.len() as f32)
+        } else { 0.0 };
+        let thr = mean_flux * 1.5; // simplu
+        let mut onsets = 0usize;
+        for &f in &flux_vals {
+            if f > thr { onsets += 1; }
         }
+        let secs = n as f32 / sr as f32;
+        let onset_rate = if secs>0.0 { onsets as f32 / secs } else { 0.0 };
+
+        // Tempo (autocorrelare pe flux → bpm peak în [50..200])
+        let bpm = {
+            if flux_vals.len() < 4 { 0.0 }
+            else {
+                let mut ac = vec![0.0f32; flux_vals.len()];
+                for lag in 1..flux_vals.len() {
+                    let mut s = 0.0f32;
+                    let mut c = 0usize;
+                    let mut i = lag;
+                    while i < flux_vals.len() {
+                        s += flux_vals[i] * flux_vals[i - lag];
+                        c += 1; i += 1;
+                    }
+                    ac[lag] = if c>0 { s/(c as f32) } else { 0.0 };
+                }
+                // map lag->bpm
+                let fps = (sr as f32) / (hop as f32);
+                let mut best_bpm = 0.0f32;
+                let mut best_val = 0.0f32;
+                for lag in 1..ac.len() {
+                    let period_sec = (lag as f32)/fps;
+                    if period_sec <= 0.0 { continue; }
+                    let cand_bpm = 60.0/period_sec;
+                    if cand_bpm >= 50.0 && cand_bpm <= 200.0 && ac[lag] > best_val {
+                        best_val = ac[lag];
+                        best_bpm = cand_bpm;
+                    }
+                }
+                best_bpm
+            }
+        };
+
+        // Amplitude entropy (histogram 64 bins)
+        let amp_entropy = {
+            let bins = 64usize;
+            let mut hist = vec![0usize; bins];
+            let mut total = 0usize;
+            for &x in mono {
+                // map [-1,1] -> [0,bins)
+                let v = ((x * 0.5 + 0.5) * (bins as f32 - 1.0)).clamp(0.0, bins as f32 - 1.0);
+                hist[v as usize] += 1;
+                total += 1;
+            }
+            if total == 0 { 0.0 } else {
+                let total_f = total as f64;
+                let h: f64 = hist.iter().map(|&c| {
+                    if c==0 { 0.0 } else {
+                        let p = c as f64 / total_f;
+                        -p * p.ln()
+                    }
+                }).sum();
+                (h / (bins as f64).ln()) as f32
+            }
+        };
+
+        // F0 (YIN-lite pe fereastra lungă, voiced ratio via energy + ACF peak)
+        let f0 = {
+            let win = (sr/50).max(1024) as usize; // ~20ms+
+            let step = hop.max(256);
+            let mut f0s = Vec::new();
+            let mut voiced = 0usize;
+            let mut i = 0usize;
+            while i + win <= mono.len() {
+                let fr = &mono[i..i+win];
+                let mean: f32 = fr.iter().copied().sum::<f32>()/(fr.len() as f32);
+                let energy: f32 = fr.iter().map(|&x|(x-mean)*(x-mean)).sum::<f32>()/(fr.len() as f32);
+                // simple acf
+                let mut best_p = 0usize;
+                let mut best_v = 0.0f32;
+                for p in (sr/400).max(2) as usize .. (sr/60) as usize {
+                    let mut s = 0.0f32; let mut c = 0usize;
+                    let mut j = p;
+                    while j<fr.len() { s += (fr[j]-mean)*(fr[j-p]-mean); c+=1; j+=1; }
+                    if c>0 { s /= c as f32; }
+                    if s > best_v { best_v = s; best_p = p; }
+                }
+                // voiced heuristic
+                if energy > 1e-4 && best_v > 1e-4 {
+                    voiced += 1;
+                    let hz = sr as f32 / best_p.max(1) as f32;
+                    if hz.is_finite() { f0s.push(hz); }
+                }
+                i += step;
+            }
+            let (mean, std, vr) = if f0s.is_empty() {
+                (0.0, 0.0, 0.0)
+            } else {
+                let m = f0s.iter().sum::<f32>()/(f0s.len() as f32);
+                let v = f0s.iter().map(|&x|(x-m)*(x-m)).sum::<f32>()/(f0s.len() as f32);
+                (m, v.sqrt(), (voiced as f32)/((mono.len()/step).max(1) as f32))
+            };
+            F0Stats{ mean_hz: mean, std_hz: std, voiced_ratio: vr.clamp(0.0,1.0) }
+        };
+
+        Ok(AudioFeatures{
+            rms, peak, crest_factor: crest, zcr,
+            onset_rate, tempo_bpm: bpm,
+            spectral_centroid_hz: (centroid_sum/n_frames as f64) as f32,
+            spectral_rolloff85_hz: (roll85_sum/n_frames as f64) as f32,
+            spectral_rolloff95_hz: (roll95_sum/n_frames as f64) as f32,
+            spectral_flatness: (flatness_sum/n_frames as f64) as f32,
+            spectral_bandwidth_hz: (bandwidth_sum/n_frames as f64) as f32,
+            spectral_entropy: (spec_entropy_sum/n_frames as f64) as f32,
+            amplitude_entropy: amp_entropy,
+            f0,
+        })
     }
-    (times, f0s, confs)
-}
-
-/// Convenience: extract onsets (sec) and a crude monophonic melody (frame-wise f0).
-pub struct MelodyExtraction {
-    pub times: Vec<f32>,
-    pub f0_hz: Vec<f32>,
-    pub confidence: Vec<f32>,
-    pub onsets_sec: Vec<f32>,
-}
-
-pub fn extract_melody_features(samples: &[f32], sr: u32) -> MelodyExtraction {
-    let win = 2048;
-    let hop = 256;
-    let (times, f0, conf) = yin_track(samples, sr, win, hop, 80.0, 1000.0, 0.1);
-    let onsets = onset_times(samples, sr, win, hop, 0.2);
-    MelodyExtraction { times, f0_hz: f0, confidence: conf, onsets_sec: onsets }
 }
