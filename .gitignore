@@ -6,3 +6,5 @@ target/
 *.jpg
 result.json
 *.zip
+results/
+matei_b/
