@@ -70,23 +70,6 @@ Generates:
 - `outputs/out.wav`  
 - `outputs/out.mid`
 
-### Interactive Text Input
-```bash
-cargo run -p xformed-cli -- text-to-audio
-```
-Type your text and press Enter.
-
-Input:  
-```
-"un apus rece peste blocuri, noapte caldă dar un pic tristă"
-```
-
-Output:  
-- Melody in D minor, tempo ~85 BPM, 11 notes.  
-- Files: `outputs/out.wav`, `outputs/out.mid`.
-
----
-
 ### Image → Audio
 ```bash
 cargo run -p xformed-cli -- image-to-audio inputs/dark_gray_peisage.png
@@ -96,11 +79,7 @@ Generates:
 - `outputs/out_from_image.mid`
 
 ### Options
-Global options:
-- `--instrument` (sine | saw | square)  
-- `--mood` (auto | major | minor)  
-- `--tempo` (BPM, optional)  
-- `--jumpiness` (0.0–1.0, melodic contour)  
+Global options:  
 - `--out-dir` (default: `outputs/`)  
 
 ---
