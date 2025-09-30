@@ -1,17 +1,4 @@
-//! Melody Synth – "pe bune": layering, polyphony, swing, humanize, percussion.
-//! Copy–paste over your file if you want this implementation wholesale.
-//!
-//! Requires in Cargo.toml:
-//! [dependencies]
-//! anyhow = "1"
-//! hound = "3"
-//!
-//! Assumptions about melody_core::MonophonicMidi:
-//! - You can iterate its notes (IntoIterator or a .iter() that yields items with
-//!   fields: pitch: u8, t_on: f32 (sec), t_off: f32 (sec), velocity: u8).
-//!   If your API differs, adjust in `collect_events(...)` (marked in file).
-//!
-//! Non-breaking API: we keep `render_wav_bytes(...)` and add `StyleParams` + `render_wav_bytes_styled(...)`.
+
 
 use anyhow::{anyhow, Result};
 use hound::{SampleFormat, WavSpec, WavWriter};
@@ -75,7 +62,7 @@ pub fn render_wav_bytes(midi: &MonophonicMidi, sr: u32, primary: Osc) -> Result<
     render_wav_bytes_styled(midi, sr, &style)
 }
 
-/// New API: full "pe bune" rendering with layering/polyphony/swing/humanize/percussion.
+/// New API: full serious rendering with layering/polyphony/swing/humanize/percussion.
 pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StyleParams) -> Result<Vec<u8>> {
     if style.layering.is_empty() {
         return Err(anyhow!("StyleParams.layering must contain at least one oscillator"));
@@ -103,11 +90,11 @@ pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StylePara
     // Layer detune/gain recipe (depends on chosen layering)
     let layer_specs = layering_specs(&style.layering);
 
-    // variație: rotim layerele pe parcurs în „secțiuni” ~ 8 sec
+    // variation: rotate layers gradually into "sections" ~ 8 sec
     let section_len = 8.0_f32;
     for (idx, ev) in events.iter().enumerate() {
         let sec_idx = (ev.t_on / section_len).floor() as usize;
-        // rotim ordinea layerelor în funcție de secțiune + index
+        // rotating layer order by de section + index
         let mut rotated = layer_specs.clone();
         if !rotated.is_empty() {
             let r = (sec_idx + idx / 32) % rotated.len();
@@ -116,7 +103,7 @@ pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StylePara
 
         for spec in &rotated {
             let f0 = midi_pitch_to_hz(ev.pitch) * cents_to_ratio(spec.detune_cents);
-            // mică variație de gain în timp (pulsare subtilă)
+            // small gain variation in time (subtile pulsation)
             let g_time = 0.9 + 0.1 * ((ev.t_on * 1.3).sin()).abs();
             render_note(
                 &mut out, sr, f0, ev.t_on, ev.t_off,
@@ -139,7 +126,7 @@ pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StylePara
 }
 
 /* =========================
-   Internal: MIDI → events
+   Internal: MIDI -> events
    ========================= */
 
 #[derive(Clone, Copy, Debug)]
@@ -150,16 +137,13 @@ struct NoteEv {
     velocity: u8,
 }
 
-/// Try to iterate MIDI notes and collect them as NoteEv.
-/// ADAPTEAZĂ AICI dacă structura ta diferă.
-/// Necesită ca MonophonicMidi să fie iterabil sau să aibă .iter().
 fn collect_events(midi: &MonophonicMidi) -> Result<Vec<NoteEv>> {
     let mut evs = Vec::new();
 
-    // Dacă MonophonicMidi are .notes: Vec<Note>
+    // If MonophonicMidi has .notes: Vec<Note>
     for n in midi.notes.iter() {
         let pitch: u8 = n.pitch;
-        // start/end pot fi f32 sau f64 în implementarea ta — convertim la f32
+        // converting to f32
         let t_on: f32  = n.start as f32;
         let t_off: f32 = n.end as f32;
         let velocity: u8 = n.velocity;
@@ -182,7 +166,7 @@ fn estimate_bpm(evs: &[NoteEv]) -> Option<f32> {
     ds.sort_by(|a,b| a.partial_cmp(b).unwrap());
     let med = ds[ds.len()/2];
     if med <= 0.0 { return None; }
-    // Assume the common case where durations ≈ 0.5 beat (eighth notes)
+    // Assume the common case where durations ~ 0.5 beat (eighth notes)
     let beats = med / 0.5;
     let bpm = 60.0 * beats.max(0.1);
     Some(bpm.clamp(50.0, 200.0))

@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use hound::WavReader;
 use std::io::Cursor;
 
-/// Decodează WAV din memorie → (mono f32 [-1,1], sample_rate).
-/// Suportă 16-bit PCM, 24/32-bit PCM, 32f, 64f. Downmix prin medie pe canale.
+/// Decodes WAV from memory -> (mono f32 [-1,1], sample_rate).
+/// Supports 16-bit PCM, 24/32-bit PCM, 32f, 64f. Downmix through average on channels.
 pub fn decode_wav_to_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
     let cursor = Cursor::new(bytes);
     let mut reader = WavReader::new(cursor).context("not a valid WAV")?;
@@ -14,7 +14,7 @@ pub fn decode_wav_to_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
         bail!("WAV has zero channels");
     }
 
-    // Citește mostrele ca tip potrivit
+    // Reads samples as right type
     let samples_f32: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
         (hound::SampleFormat::Int, 16) => {
             reader
@@ -23,7 +23,7 @@ pub fn decode_wav_to_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
                 .collect()
         }
         (hound::SampleFormat::Int, 24) => {
-            // hound expune 24-bit ca i32 în .samples::<i32>()
+            // hound exposes 24-bit as i32 in .samples::<i32>()
             let max = (1i64 << 23) as f32;
             reader
                 .samples::<i32>()
@@ -43,16 +43,16 @@ pub fn decode_wav_to_mono_f32(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
         (hound::SampleFormat::Float, 64) => {
             bail!("64-bit float WAV is not supported by hound; please convert to 32-bit float or PCM.");
         }
-        // fallback generic: încearcă f32
+        // generic fallback: tries f32
         _ => {
-            // Ultima șansă: poate e de fapt 32f
+            // Last chance: it might be 32f
             let cursor = Cursor::new(bytes);
             let mut r2 = WavReader::new(cursor).context("not a valid WAV (fallback)")?;
             r2.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
         }
     };
 
-    // Downmix la mono (medie pe canale)
+    // mono downmix (average on channels)
     if ch == 1 {
         return Ok((samples_f32, sr));
     }

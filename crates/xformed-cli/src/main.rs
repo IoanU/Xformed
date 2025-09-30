@@ -7,20 +7,20 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-/// xformed-cli – zero-knobs: totul se deduce din conținut.
-/// Comenzi:
-///   - text-to-audio --text "..."     (sau text pe STDIN)
+/// xformed-cli – zero-knobs
+/// Commands:
+///   - text-to-audio --text "..."     (or text on STDIN)
 ///   - image-to-audio --input path.png
-///   - *-features (debug): audio/text/image → json
+///   - *-features (debug): audio/text/image -> json
 #[derive(Parser, Debug)]
 #[command(name="xformed", version, about="Zero-knobs content-driven music")]
 struct Cli {
-    /// Directorul de ieșire (implicit: outputs/)
+    /// out folder (implicit: outputs/)
     #[arg(long, default_value = "outputs")]
     out_dir: PathBuf,
 
-    /// Numele de bază pentru TOATE fișierele generate (fără extensie).
-    /// Exemplu: --name matei  -> outputs/matei.wav, outputs/matei.midi.json, outputs/matei.json
+    /// base name for every file generated (no extension).
+    /// Exemplu: --name sebastian  -> outputs/sebastian.wav, outputs/sebastian.midi.json, outputs/sebastian.json
     #[arg(long)]
     name: Option<String>,
 
@@ -30,34 +30,34 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Text → Audio (WAV + MIDI JSON)
+    /// Text -> Audio (WAV + MIDI JSON)
     TextToAudio {
-        /// Textul de intrare; dacă lipsește, citește din STDIN
+        /// Input text; if missing, read from STDIN
         #[arg(long)]
         text: Option<String>,
     },
 
-    /// Imagine → Audio (WAV + MIDI JSON)
+    /// Image -> Audio (WAV + MIDI JSON)
     ImageToAudio {
-        /// Calea către imagine (PNG/JPEG)
+        /// Path to image (PNG/JPEG)
         #[arg(long)]
         input: PathBuf,
     },
 
-    /// DEBUG: extrage JSON cu feature-uri din audio WAV
+    /// DEBUG: extract JSON with features from audio WAV
     AudioFeatures {
         #[arg(long)]
         input: PathBuf,
     },
 
-    /// DEBUG: extrage JSON cu feature-uri din text
+    /// DEBUG: extract JSON with features from text
     TextFeatures {
-        /// Text de intrare; dacă lipsește, citește din STDIN
+        /// Input text; if missing, read from STDIN
         #[arg(long)]
         text: Option<String>,
     },
 
-    /// DEBUG: extrage JSON cu feature-uri din imagine
+    /// DEBUG: extract JSON with features from image
     ImageFeatures {
         #[arg(long)]
         input: PathBuf,
@@ -89,8 +89,8 @@ fn sanitize_basename(s: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-/// Scrie artefactele cu un `base_stem` implicit, dar dacă `name_override` e Some(..),
-/// toate fișierele (WAV, .midi.json, .json) vor folosi acel stem.
+/// Write artifacts with an implicit "base_stem", but if name_override is Some(..),
+/// all files (WAV, .midi.json, .json) will use that stem.
 fn write_artifacts(out_dir: &Path, base_stem: &str, name_override: Option<&str>, artifacts: &[OutputArtifact]) -> Result<()> {
     ensure_dir(out_dir)?;
     let stem = name_override.unwrap_or(base_stem);

@@ -28,7 +28,7 @@ pub fn analyze_text(s: &str) -> Result<TextFeatures> {
     }
     let ttr = if n_words>0 { (vocab.len() as f32)/(n_words as f32) } else { 0.0 };
 
-    // syllables (rough English heuristic; poți schimba pentru RO)
+    // syllables (rough English heuristic)
     fn count_syllables(w: &str) -> usize {
         let w = w.to_lowercase();
         let vowels = "aeiouyăîâoe";
@@ -45,7 +45,7 @@ pub fn analyze_text(s: &str) -> Result<TextFeatures> {
     let syllables_per_word = if n_words>0 { syllables_total as f32 / n_words as f32 } else { 0.0 };
     let reading_time_minutes = if n_words>0 { n_words as f32 / 180.0 } else { 0.0 };
 
-    let punct_set: &[_] = &['.', ',', ';', ':', '!', '?', '-', '–', '—', '(', ')', '[', ']', '{', '}', '"', '\''];
+    let punct_set: &[_] = &['.', ',', ';', ':', '!', '?', '-', '(', ')', '[', ']', '{', '}', '"', '\''];
     let punct_count = s.chars().filter(|c| punct_set.contains(c)).count();
     let punctuation_ratio = if n_chars>0 { punct_count as f32 / n_chars as f32 } else { 0.0 };
 

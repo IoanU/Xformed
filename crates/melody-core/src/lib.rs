@@ -26,7 +26,7 @@ impl MonophonicMidi {
         let ppq: u16 = 480;
         let micros_per_quarter = (60_000_000u32 / self.tempo_bpm) as u32;
 
-        // sortăm evenimentele
+        // sorting events
         let mut evs: Vec<(f32, bool, &Note)> = Vec::new();
         for n in &self.notes {
             evs.push((n.start, true, n));
@@ -41,7 +41,7 @@ impl MonophonicMidi {
             kind: TrackEventKind::Meta(MetaMessage::Tempo(micros_per_quarter.into())),
         });
 
-        // delte de timp
+        // time deltas
         let mut last_tick: u32 = 0;
         for (t_sec, is_on, n) in evs {
             let tick = (t_sec.max(0.0) * ppq as f32) as u32;

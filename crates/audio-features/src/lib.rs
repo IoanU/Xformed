@@ -50,7 +50,6 @@ impl FeatureExtractor {
         Self { target_sr, frame_size, hop_size }
     }
 
-    /// Dacă ai deja decode → mono f32 @sr, folosește direct asta.
     pub fn analyze_mono(&self, mono: &[f32], sr: u32) -> Result<AudioFeatures> {
         use rustfft::{FftPlanner, num_complex::Complex};
         use anyhow::bail;
@@ -202,11 +201,11 @@ impl FeatureExtractor {
             prev_mag = mag;
         }
 
-        // Onset rate (pe sec): prag adaptiv pe flux
+        // Onset rate (per sec): adaptive treshold on flux
         let mean_flux = if !flux_vals.is_empty() {
             flux_vals.iter().sum::<f32>() / (flux_vals.len() as f32)
         } else { 0.0 };
-        let thr = mean_flux * 1.5; // simplu
+        let thr = mean_flux * 1.5; // simple
         let mut onsets = 0usize;
         for &f in &flux_vals {
             if f > thr { onsets += 1; }
@@ -214,7 +213,7 @@ impl FeatureExtractor {
         let secs = n as f32 / sr as f32;
         let onset_rate = if secs>0.0 { onsets as f32 / secs } else { 0.0 };
 
-        // Tempo (autocorrelare pe flux → bpm peak în [50..200])
+        // Tempo (autocorrelation on flux -> bpm peak in [50..200])
         let bpm = {
             if flux_vals.len() < 4 { 0.0 }
             else {
@@ -269,7 +268,7 @@ impl FeatureExtractor {
             }
         };
 
-        // F0 (YIN-lite pe fereastra lungă, voiced ratio via energy + ACF peak)
+        // F0 (YIN-lite on long window, voiced ratio via energy + ACF peak)
         let f0 = {
             let win = (sr/50).max(1024) as usize; // ~20ms+
             let step = hop.max(256);

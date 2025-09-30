@@ -1,7 +1,7 @@
-//! converters – zero-knobs pipeline: content → music
-//! - Text → Audio: durata din numărul de cuvinte; stil din text-features
-//! - Image → Audio: durata din rezoluție; parcurgere fără loop; stil din image-features
-//! - (opțional) *-features rute pentru debug (audio/text/image → json)
+//! converters - zero-knobs pipeline: content -> music
+//! - Text -> Audio: duration from word count; style from text-features
+//! - Image -> Audio: duration from rezolution; parsing without loop; style from image-features
+//! - (optional) *-features rute for debug (audio/text/image -> json)
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
@@ -25,7 +25,7 @@ pub enum InputPayload {
     Text { text: String },
     /// Raw image, base64-encoded (PNG/JPEG etc.)
     ImageBase64 { data_b64: String },
-    /// Raw audio (WAV) base64 – used only for audio→json features
+    /// Raw audio (WAV) base64 - used only for audio->json features
     AudioBase64 { data_b64: String },
 }
 
@@ -53,14 +53,14 @@ pub struct ConvertResponse {
     pub artifacts: Vec<OutputArtifact>,
 }
 
-/// Zero-knobs options – păstrăm doar controllerele „operaționale” (nu creative).
+/// Zero-knobs options – only keep the operational controllers (not the creative ones).
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct TransformOpts {
-    /// (opțional) doar pentru text; fallback de scalare
+    /// (optional) only for text; scaling fallback
     pub text_sec_per_word: Option<f32>,  // default 0.30
     pub text_min_sec: Option<f32>,       // default 10
     pub text_max_sec: Option<f32>,       // default 180
-    /// (opțional) doar pentru imagini; dacă lipsește, deducem din rezoluție
+    /// (optional) only for images; if missing, extracting from resolution
     pub target_seconds: Option<f32>,
 }
 
@@ -95,10 +95,10 @@ pub fn handle_convert(req: ConvertRequest) -> Result<ConvertResponse> {
             let bytes = B64.decode(data_b64).context("bad audio base64")?;
             let (mono, sr) = audio_features::decode_wav_to_mono_f32(&bytes)?;
 
-            // construiește extractorul (parametri ok by default)
+            // building the extractor (parameters ok by default)
             let fe = AudioFE::new(44_100, 2048, 512);
 
-            // rulează analiza pe bufferul tău și rata lui reală
+            // running analysis on your buffer and its real rate
             let feats = fe.analyze_mono(&mono, sr)?;
             Ok(ConvertResponse {
                 artifacts: vec![OutputArtifact::Json { data: serde_json::to_value(feats)? }],
@@ -142,12 +142,12 @@ struct AutoStyle {
 fn clamp_range(x: f32, lo: f32, hi: f32) -> f32 { x.max(lo).min(hi) }
 
 fn style_from_text(tf: &TextFeatures) -> AutoStyle {
-    // tempo ↑ cu densitatea fonetică
+    // tempo ^ with phonetic density
     let tempo = (95.0 + 35.0 * (tf.syllables_per_word - 1.0).clamp(0.0, 1.5)).round() as u32;
     let scale = if tf.sentiment_score < 0.0 { ScaleKind::Minor } else { ScaleKind::Major };
     let root_midi = 60;
 
-    // „bogăție” lexicală → polifonie & layering
+    // lexical "richness" -> polyphony & layering
     let richness = ((tf.ttr + tf.word_entropy_bits / 5.0) / 2.0).clamp(0.0, 1.0);
     let polyphony = if richness > 0.7 { 3 } else if richness > 0.4 { 2 } else { 1 };
     let layering = if polyphony >= 3 {
@@ -191,26 +191,26 @@ fn style_from_image(fe: &ImageFeatures) -> AutoStyle {
 }
 
 /* ------------------------------------
-   Text → Audio (zero-knobs)
+   Text -> Audio (zero-knobs)
 -------------------------------------*/
 
 fn text_to_audio(text: &str, opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)> {
     let tf = analyze_text(text)?;
     let sty = style_from_text(&tf);
 
-    // 1) Durată țintă din text (zero-knobs)
+    // 1) target duration from text (zero-knobs)
     let spw = opts.text_sec_per_word.unwrap_or(0.50);
     let min_s = opts.text_min_sec.unwrap_or(10.0);
     let max_s = opts.text_max_sec.unwrap_or(180.0);
     let desired_seconds = clamp_range(6.0 + tf.n_words as f32 * spw, min_s, max_s);
 
-    // 2) Număr de „unități” muzicale (evenimente) estimat
-    //    (păstrăm ideea de random-walk pe grade, dar cu variații)
+    // 2) number of musical "events" (estimated)
+    //    (keeping the random-walk idea, but using variations)
     let total_beats = desired_seconds * (sty.tempo as f32) / 60.0;
     let approx_note_len_beats = (4.0 / (tf.syllables_total as f32 / 12.0 + 1.0)).clamp(0.25, 1.0);
     let n_base = (total_beats / approx_note_len_beats).ceil().max(12.0) as usize;
 
-    // 3) Curba de grade: random walk cu „jumpiness” + mici octave hops
+    // 3) unit curve: random walk with "jumpiness" + small octave hops
     let step_span = (1.0 + 6.0 * sty.jumpiness).round() as i32; // 1..7
     let mut degs: Vec<i32> = Vec::with_capacity((n_base as f32 * 1.2) as usize);
     let mut cur = 0;
@@ -219,14 +219,14 @@ fn text_to_audio(text: &str, opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)>
         let step = dir * ((1 + (i as i32 % step_span)).min(step_span));
         cur = (cur + step).clamp(-12, 12);
 
-        // Ocazional: salt de octavă (sus dacă sentiment pozitiv & luminos, jos dacă negativ)
+        // Ocasionally: octave jumps (up if the sentiment is positive and down if sentiment is negative)
         if i % 23 == 0 && sty.humanize > 0.1 {
             let oct = if tf.sentiment_score >= 0.0 { 12 } else { -12 };
             cur = (cur + oct).clamp(-12, 12);
         }
         degs.push(cur);
 
-        // Mic motiv „turn” la început de frază (aprox. la fiecare ~20 unități)
+        // small motive turn in the beginning of the phrase (about every ~20 units)
         if i % 20 == 0 && i > 0 && sty.jumpiness > 0.35 {
             let a = (cur - 2).clamp(-12, 12);
             let b = cur;
@@ -235,19 +235,19 @@ fn text_to_audio(text: &str, opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)>
         }
     }
 
-    // 4) Ritmuri variabile (pattern-uri + mici pauze) – ca la imagine
-    //    Alegem pattern în funcție de „punctuation_ratio” (mai multă punctuație ⇒ mai multă sincopă)
+    // 4) variable rhythms (small pauses and patterns) - like for the image
+    //    choosing the pattern by the "punctuation_ratio" (more punctuation => more syncope)
     let rhythms: &[&[f32]] = &[
-        &[0.5, 0.5, 0.5, 0.5],          // optimi „drepte”
-        &[0.25, 0.75, 0.5, 0.5],        // sincopă ușoară
-        &[0.75, 0.25, 0.5, 0.25, 0.25], // „push-pull”
+        &[0.5, 0.5, 0.5, 0.5],          // "straight" eighths
+        &[0.25, 0.75, 0.5, 0.5],        // syncope ușoară
+        &[0.75, 0.25, 0.5, 0.25, 0.25], // "push-pull"
     ];
     let sync_bias = (tf.punctuation_ratio * 10.0).round() as usize; // 0..~3
     let mut m = MonophonicMidi::new(sty.tempo);
     let mut t = 0.0f32;
     let mut rstep_idx = 0usize;
 
-    // Velocity de bază, influențată de sentiment
+    // base velocity, influenced by sentiment
     let base_vel = (90.0 + 30.0 * tf.sentiment_score).clamp(40.0, 120.0) as u8;
 
     for (i, d) in degs.iter().enumerate() {
@@ -256,21 +256,21 @@ fn text_to_audio(text: &str, opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)>
         let dur_beats = pat[rstep_idx % pat.len()];
         rstep_idx += 1;
 
-        // Mică pauză ocazională (respirație)
+        // small occasional pause (breathing)
         let is_rest = (i % 19 == 0) && (sty.humanize > 0.12);
         if !is_rest {
             let pitch = degree_to_midi(sty.root_midi, *d, sty.scale).clamp(0, 127) as u8;
-            // mici accente: o dată la 8 evenimente, lovește puțin mai tare
+            // small accents: once every 8 events, hit a little harder
             let vel = if i % 8 == 0 { (base_vel as i32 + 10).clamp(1, 127) as u8 } else { base_vel };
             m.push(pitch, t, t + dur_beats, vel);
         }
         t += dur_beats;
 
-        // Terminăm dacă am depășit ținta de beats (protecție la motive inserate)
+        // finish if we had reached the beat count target (protection for inserted motives)
         if t >= total_beats { break; }
     }
 
-    // 5) Randare pe bune (layering, poly, swing, humanize, percuție)
+    // 5) serious rendering (layering, poly, swing, humanize, percussion)
     let wav = render_wav_bytes_styled(&m, 44_100, &StyleParams {
         layering: sty.layering,
         swing: sty.swing,
@@ -284,7 +284,7 @@ fn text_to_audio(text: &str, opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)>
 }
 
 /* ------------------------------------
-   Image → Audio (zero-knobs, no loop)
+   Image -> Audio (zero-knobs, no loop)
 -------------------------------------*/
 
 fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -296,11 +296,11 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 { return Err(anyhow!("empty image")); }
 
-    // 2) Global features → style
+    // 2) Global features -> style
     let ife = analyze_image_bytes(img_bytes)?;
     let sty = style_from_image(&ife);
 
-    // 3) Durata ∝ rezoluției: #tile-uri ~ arie/(300x300) clampat 250..1500
+    // 3) Rezolution duration: #tiles ~ area/(300x300) clamped 250..1500
     let cells_target = ((w as f32 * h as f32) / (380.0 * 380.0)).clamp(180.0, 950.0);
     let aspect = w as f32 / h.max(1) as f32;
     let cols = (cells_target.sqrt() * aspect.sqrt()).round().clamp(16.0, 96.0) as u32;
@@ -308,7 +308,7 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
     let tile_w = (w as f32 / cols as f32).ceil().max(1.0) as u32;
     let tile_h = (h as f32 / rows as f32).ceil().max(1.0) as u32;
 
-    // 4) Parcurgere fără loop (boustrophedon) + mapare locală HSV → note
+    // 4) Parsing without loop (boustrophedon) + local mapping HSV -> note
     let rgb = img.to_rgb8();
     let total_notes = (cols * rows) as usize;
     let mut degs = Vec::with_capacity(total_notes);
@@ -337,7 +337,7 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
             let x0 = (cc * tile_w).min(w.saturating_sub(1));
             let x1 = ((cc + 1) * tile_w).min(w);
 
-            // subsampling 4x4 px – HSV average
+            // subsampling 4x4 px - HSV average
             let mut sh=0.0; let mut ss=0.0; let mut sv=0.0; let mut cnt=0.0;
             let mut yy=y0; while yy<y1 {
                 let mut xx=x0; while xx<x1 {
@@ -352,7 +352,7 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
             }
             let (mh, ms, mv) = if cnt>0.0 { (sh/cnt, ss/cnt, sv/cnt) } else { (base_h, base_s, base_v) };
 
-            // mapping: hue diff → step size, saturation → extra salt, value → velocity
+            // mapping: hue diff -> step size, saturation -> extra salt, value -> velocity
             let dh = (mh - base_h).abs();
             let hue_push = ((dh / 180.0) * span as f32).round() as i32;
             let salt = if ms < 0.2 { 0 } else if ms < 0.5 { 1 } else { 2 };
@@ -361,14 +361,14 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
             let dir = if (r + cc) % 2 == 0 { 1 } else { -1 };
             cur_degree = (cur_degree + dir * step_deg).clamp(-12, 12);
 
-            // mică transpoziție ocazională pentru relief (fără să iasă din plaja ±12)
+            // small occasional transposition for relief (without exiting the ±12 range)
             if (cc + r) % 37 == 0 && sty.humanize > 0.1 {
                 cur_degree = (cur_degree + if base_v > 0.5 { 12 } else { -12 }).clamp(-12, 12);
             }
 
-            // „turn” motivic la fiecare trecere de colț pe rânduri pare
+            // "motivic turn" every corner passing on even rows
             if cc == 0 && (r % 2 == 0) && sty.jumpiness > 0.4 {
-                // inserăm 2 grade suplimentare scurte (se vor folosi mai jos la ritmuri variabile)
+                // insert 2 short bonus notes (used later for variable rhythms)
                 degs.push((cur_degree - 2).clamp(-12, 12));
                 vels.push((vels.last().copied().unwrap_or(80) as i32 + 6).clamp(30, 127) as u8);
                 degs.push((cur_degree).clamp(-12, 12));
@@ -384,11 +384,11 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
         }
     }
 
-    // 5) Construim MIDI: notă per tile, fără pattern loop. Durata pe notă = 0.5 beat (optime).
+    // 5) Building MIDI: note per tile, without pattern loop. Duration per note = 0.5 beat (eighth).
     let rhythms: &[&[f32]] = &[
-        &[0.5, 0.5, 0.5, 0.5],          // optimi „drepte”
-        &[0.25, 0.75, 0.5, 0.5],        // sincopă ușoară
-        &[0.75, 0.25, 0.5, 0.25, 0.25], // „push-pull”
+        &[0.5, 0.5, 0.5, 0.5],          // "straight" eighths
+        &[0.25, 0.75, 0.5, 0.5],        // light syncope
+        &[0.75, 0.25, 0.5, 0.25, 0.25], // "push-pull"
     ];
     let mut m = MonophonicMidi::new(sty.tempo);
     let mut t = 0.0f32;
@@ -399,14 +399,14 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
         let pitch = degree_to_midi(sty.root_midi, *d, sty.scale).clamp(0, 127) as u8;
         let vel = vels[i];
 
-        // alege pattern în funcție de „agitația” imaginii (edge_density) + progres
+        // choose pattern by image "agitation" (edge_density) + progress
         rpat_idx = ((sty.swing * 10.0) as usize + (i / 32)) % rhythms.len();
         let pat = rhythms[rpat_idx];
 
         let dur_beats = pat[rstep_idx % pat.len()];
         rstep_idx += 1;
 
-        // 5–10% șansă de „rest”: scapă o notă ca să respire
+        // 5–10% chance of "resting": dropping a note to breathe
         let is_rest = (i % 17 == 0) && (sty.humanize > 0.15);
         if !is_rest {
             m.push(pitch, t, t + dur_beats, vel);
@@ -414,7 +414,7 @@ fn image_to_audio(img_bytes: &[u8], _opts: &TransformOpts) -> Result<(Vec<u8>, V
         t += dur_beats;
     }
 
-    // 6) Randare cu toate „pe bune”
+    // 6) Serious rendering with everything
     let wav = render_wav_bytes_styled(&m, 44_100, &StyleParams {
         layering: sty.layering,
         swing: sty.swing,

@@ -1,36 +1,41 @@
 # Xformed
 
-A creative transformation tool that converts between **text, audio, and images** using rule-based feature extraction and procedural synthesis.  
-The project demonstrates how semantic and structural features (sentiment, color, spectral statistics, etc.) can be mapped into musical or visual domains.
+A creative transformation toolkit that converts between **text, images, and audio** using interpretable feature extraction and procedural synthesis.  
+Semantic and structural features (sentiment, color, spectral statistics, etc.) are mapped into musical or visual domains.
 
 ---
 
 ## 📌 Description & Purpose
-**Xformed** is an experimental playground for "cross-modal transformations":  
-- From **text** → generate melodies (WAV + MIDI).  
-- From **images** → generate soundscapes based on color and visual features.  
-- From **audio** → extract metrics (RMS, tempo, entropy, etc.) or map features into visuals.  
+**Xformed** is an experimental playground for *cross-modal transformations*:  
+- **Text → Audio**: generate melodies (WAV + MIDI JSON) based on linguistic structure and sentiment.  
+- **Image → Audio**: generate soundscapes based on color palettes, contrast, and complexity.  
+- **Audio → Metrics (JSON)**: extract interpretable features (RMS, spectral centroid, entropy, tempo, etc.).  
 
-The main goal is to **bridge content modalities** (text, audio, visual) with interpretable metrics and lightweight synthesis, without relying on heavy machine learning models.
+The goal is to **bridge content modalities** with lightweight, explainable mappings — without heavy ML models.
 
 ---
 
 ## ⚡ Features
-- **Text → Audio**:  
-  - Sentiment analysis → choose minor/major.  
-  - Syllable count → number of notes.  
-  - Procedural synth with sine, saw, or square waves.  
-- **Image → Audio**:  
-  - Color → tonality and pitch space.  
+- **Text → Audio**  
+  - Sentiment → major/minor scale.  
+  - Syllables, words → tempo and note density.  
+  - Punctuation & entropy → rhythm variety and dynamics.  
+  - Procedural synth with multiple oscillators (sine, saw, square).  
+  - Optional percussions with fills & ghost notes.  
+
+- **Image → Audio**  
+  - Hue → tonal center.  
   - Brightness/contrast → tempo & dynamics.  
-- **Audio → Metrics**:  
-  - RMS, peak, crest factor.  
-  - Spectral centroid, rolloff, flatness, bandwidth.  
-  - Entropy (amplitude & spectral).  
-  - Onset rate & tempo estimation.  
-  - f0 stats (mean, std, voiced ratio).  
-- **Audio → Visual / Text**: map spectral energy and entropy to palettes and descriptors.  
-- **CLI-first design**: no server needed, run transformations locally.  
+  - Edge density & variance → rhythm and harmonic complexity.  
+
+- **Audio → JSON Metrics**  
+  - Loudness: RMS, peak, crest factor.  
+  - Spectrum: centroid, rolloff, flatness, bandwidth.  
+  - Entropy: spectral & amplitude.  
+  - Onset rate, tempo estimation.  
+  - Fundamental frequency stats (mean, std, voiced ratio).  
+
+- **CLI-first design**: everything runs locally; no external server.  
 
 ---
 
@@ -53,53 +58,50 @@ cargo build --workspace
 
 ## ▶️ Usage
 
-The main entry point is the CLI:
+Main entry point is the CLI:
 
 ```bash
 cargo run -p xformed-cli -- <COMMAND> [OPTIONS]
 ```
 
 ### Text → Audio
-Convert a text phrase into melody:
+Convert text into melody:
 
 ```bash
-cargo run -p xformed-cli -- text-to-audio --text "un apus rece peste blocuri"
+cargo run -p xformed-cli -- text-to-audio --name hello "this is a test phrase"
 ```
 
-Generates:
-- `outputs/out.wav`  
-- `outputs/out.mid`
+Outputs:
+- `outputs/hello.wav` – rendered audio.  
+- `outputs/hello.midi.json` – MIDI timeline in JSON.  
 
 ### Image → Audio
-```bash
-cargo run -p xformed-cli -- image-to-audio inputs/dark_gray_peisage.png
-```
-Generates:
-- `outputs/out_from_image.wav`  
-- `outputs/out_from_image.mid`
+Convert an image (base64 or file) into audio:
 
-### Options
-Global options:  
-- `--out-dir` (default: `outputs/`)  
+```bash
+cargo run -p xformed-cli -- image-to-audio --name sunset ./examples/sunset.png
+```
+
+Outputs:
+- `outputs/sunset.wav`  
+- `outputs/sunset.midi.json`  
+
+### Audio → Features
+Extract metrics from a WAV:
+
+```bash
+cargo run -p xformed-cli -- audio-to-json ./examples/drumloop.wav
+```
+
+Outputs JSON with RMS, spectral features, entropy, tempo, etc.
 
 ---
 
 ## 📂 Project Structure
-
-```
-Xformed/
-├── Cargo.toml                 # Workspace manifest
-├── Cargo.lock                 # Ensures reproductible builds
-├── crates/
-│   ├── audio-features/        # Extracts audio metrics
-│   ├── text-features/         # Extracts text metrics
-│   ├── visual-features/       # Extracts image metrics
-│   ├── melody-core/           # MIDI generation
-│   ├── melody-synth/          # WAV synthesis (sine/saw/square)
-│   ├── converters/            # Cross-modal converters
-│   ├── api/                   # Optional Axum HTTP API
-│   └── xformed-cli/           # CLI frontend
-├── outputs/                   # Generated artifacts (ignored or local)
-├── inputs/                    # Pre-selected files meant to be examples
-├── services/api               # API integration
-└── README.md                  # README file
+- `crates/text-features` – text analysis (syllables, entropy, sentiment).  
+- `crates/visual-features` – image analysis (color, edges, brightness).  
+- `crates/melody-core` – core MIDI timeline representation.  
+- `crates/melody-synth` – procedural audio synthesis engine.  
+- `crates/converters` – mapping text/image/audio → artifacts.  
+- `crates/xformed-cli` – command-line interface.  
+- `services/api` – optional service layer.  

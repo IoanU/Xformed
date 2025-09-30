@@ -11,7 +11,7 @@ base64 = "0.22"
 image = "0.25"
 palette = "0.7"
 
-# folosite doar dacă rulezi partea de API (services/api)
+# only used if running API section (services/api)
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"
