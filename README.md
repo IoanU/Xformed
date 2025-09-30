@@ -79,7 +79,7 @@ Outputs:
 Convert an image (base64 or file) into audio:
 
 ```bash
-cargo run -p xformed-cli -- image-to-audio --name sunset ./examples/sunset.png
+cargo run -p xformed-cli -- image-to-audio --name sunset --input ./examples/sunset.png
 ```
 
 Outputs:
