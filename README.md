@@ -5,7 +5,7 @@ Semantic and structural features (sentiment, color, spectral statistics, etc.) a
 
 ---
 
-## 📌 Description & Purpose
+## Description & Purpose
 **Xformed** is an experimental playground for *cross-modal transformations*:  
 - **Text → Audio**: generate melodies (WAV + MIDI JSON) based on linguistic structure and sentiment.  
 - **Image → Audio**: generate soundscapes based on color palettes, contrast, and complexity.  
@@ -15,7 +15,7 @@ The goal is to **bridge content modalities** with lightweight, explainable mappi
 
 ---
 
-## ⚡ Features
+## Features
 - **Text → Audio**  
   - Sentiment → major/minor scale.  
   - Syllables, words → tempo and note density.  
@@ -39,7 +39,7 @@ The goal is to **bridge content modalities** with lightweight, explainable mappi
 
 ---
 
-## 🚀 Installation
+## Installation
 
 ### Requirements
 - [Rust](https://www.rust-lang.org/tools/install) (≥ 1.70 recommended)  
@@ -56,7 +56,7 @@ cargo build --workspace
 
 ---
 
-## ▶️ Usage
+## Usage
 
 Main entry point is the CLI:
 
@@ -97,7 +97,7 @@ Outputs JSON with RMS, spectral features, entropy, tempo, etc.
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 - `crates/text-features` – text analysis (syllables, entropy, sentiment).  
 - `crates/visual-features` – image analysis (color, edges, brightness).  
 - `crates/melody-core` – core MIDI timeline representation.  
