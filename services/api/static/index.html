@@ -18,15 +18,16 @@
 <div class="transformation-strip" aria-label="Transformation visualization">
 <aside class="bridge" aria-label="Transformation route">
 <div class="bridge-cap"><span>Route</span><span id="route-code">Words → Music</span></div>
-<svg id="route-map" viewBox="0 0 432 88" aria-hidden="true">
+<svg id="route-map" viewBox="0 0 240 218" aria-hidden="true">
 <defs><marker id="route-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L7 3.5L0 7" fill="none" stroke="#264ae3" stroke-width="1.5"/></marker></defs>
-<path class="route-grid" d="M32 32H400"/>
-<path id="route-path" d="M44 32Q216 3 386 32" marker-end="url(#route-arrow)"/>
+<path class="route-grid" d="M120 36L32 172H208Z"/>
+<path class="route-spokes" d="M120 36L120 116M32 172L120 116M208 172L120 116"/>
+<path id="route-path" d="M126 46L200 160" marker-end="url(#route-arrow)"/>
 <circle id="route-dot" r="3.2"/>
-<g class="port" data-route-port="text" transform="translate(32 32)"><circle r="10"/><text y="33" text-anchor="middle">Words</text></g>
-<g class="port" data-route-port="image" transform="translate(155 32)"><circle r="10"/><text y="33" text-anchor="middle">Image</text></g>
-<g class="port" data-route-port="audio" transform="translate(277 32)"><circle r="10"/><text y="33" text-anchor="middle">Sound</text></g>
-<g class="port" data-route-port="json" transform="translate(400 32)"><circle r="10"/><text y="33" text-anchor="middle">Analysis</text></g>
+<g class="port" data-route-port="text" transform="translate(120 36)"><circle r="10"/><text y="-20" text-anchor="middle">Words</text></g>
+<g class="port" data-route-port="image" transform="translate(32 172)"><circle r="10"/><text y="30" text-anchor="middle">Image</text></g>
+<g class="port" data-route-port="audio" transform="translate(208 172)"><circle r="10"/><text y="30" text-anchor="middle">Sound</text></g>
+<g class="port" data-route-port="json" transform="translate(120 116)"><circle r="7"/><text y="28" text-anchor="middle">Analysis</text></g>
 </svg></aside>
 <div class="transformation-labels"><span id="morph-from">Words</span><span class="morph-progress" aria-hidden="true"><i id="morph-position"></i></span><span id="morph-to">Music</span></div><canvas id="portal" role="img" aria-label="Words transforming into Music"></canvas></div><div id="stage" class="stage"><div id="empty"><svg id="idle-glyph" viewBox="0 0 400 300" aria-hidden="true"><g class="glyph-lines"><path d="M55 30L345 270M345 30L55 270"/><path d="M80 30L320 270M320 30L80 270"/><path d="M105 30L295 270M295 30L105 270"/><path d="M130 30L270 270M270 30L130 270"/><path d="M155 30L245 270M245 30L155 270"/></g></svg><span>Awaiting input</span></div><div id="loading" hidden><div class="scan-lines" aria-hidden="true"></div><span id="loading-text">Rendering</span></div><div id="score-wrap" hidden><canvas id="score" role="img" aria-label="Multi-track musical score"></canvas></div><img id="generated-image" alt="Generated artwork" hidden><article id="generated-text" hidden></article><div id="analysis" hidden><h3>Feature analysis</h3><div id="metrics"></div><details><summary>JSON</summary><pre id="json"></pre></details></div></div>
 <div id="playback" hidden><audio id="player" controls></audio><div class="output-info"><div id="summary"></div><span id="take-number"></span></div><div id="track-legend" role="group" aria-label="Tracks visible in the score"></div><p id="track-help" hidden>Score visibility. Playback: full mix.</p><div class="result-actions"><button id="variation" class="secondary" hidden>New take ↻</button><button id="copy-text" class="secondary" hidden>Copy</button><button id="bundle" class="secondary">Export ZIP</button><nav id="downloads" aria-label="Export individual files"></nav></div></div>

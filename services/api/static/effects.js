@@ -78,19 +78,26 @@
     }
   }
   function layoutRoute() {
-    // Match SVG units to CSS pixels so labels stay readable at every viewport width.
+    // The three creative modalities form a triangle; analysis sits at its center.
+    // Keep SVG units in CSS pixels so labels remain readable as the panel resizes.
     const width = Math.max(160, routeMap.getBoundingClientRect().width);
-    routeMap.setAttribute('viewBox', `0 0 ${width} 88`);
-    const sockets = { text: 0, image: 1, audio: 2, json: 3 };
-    const x = kind => 32 + sockets[kind] * (width - 64) / 3;
+    routeMap.setAttribute('viewBox', `0 0 ${width} 218`);
+    const center = width / 2, spread = Math.min(88, (width - 60) / 2);
+    const sockets = { text: [center, 36], image: [center - spread, 172], audio: [center + spread, 172], json: [center, 116] };
     routeMap.querySelectorAll('[data-route-port]').forEach(port => {
-      port.setAttribute('transform', `translate(${x(port.dataset.routePort)} 32)`);
+      port.setAttribute('transform', `translate(${sockets[port.dataset.routePort].join(' ')})`);
     });
-    routeMap.querySelector('.route-grid').setAttribute('d', `M32 32H${width - 32}`);
-    const direction = Math.sign(x(to) - x(from));
-    const start = x(from) + direction * 12;
-    const end = x(to) - direction * 14;
-    routePath.setAttribute('d', `M${start} 32Q${(start + end) / 2} 3 ${end} 32`);
+    const [top, left, right, core] = ['text', 'image', 'audio', 'json'].map(kind => sockets[kind].join(' '));
+    routeMap.querySelector('.route-grid').setAttribute('d', `M${top}L${left}L${right}Z`);
+    routeMap.querySelector('.route-spokes').setAttribute('d', `M${top}L${core}M${left}L${core}M${right}L${core}`);
+    const a = sockets[from], b = sockets[to], dx = b[0] - a[0], dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy), ux = dx / length, uy = dy / length;
+    const start = [a[0] + ux * (from === 'json' ? 9 : 12), a[1] + uy * (from === 'json' ? 9 : 12)];
+    const end = [b[0] - ux * (to === 'json' ? 11 : 14), b[1] - uy * (to === 'json' ? 11 : 14)];
+    const midpoint = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+    const outward = (-uy * (midpoint[0] - center) + ux * (midpoint[1] - 126)) >= 0 ? 1 : -1;
+    const bend = from === 'json' || to === 'json' ? 0 : 18 * outward;
+    routePath.setAttribute('d', `M${start.join(' ')}Q${midpoint[0] - uy * bend} ${midpoint[1] + ux * bend} ${end.join(' ')}`);
     animateRoute();
   }
   function setRoute(source, destination) {
