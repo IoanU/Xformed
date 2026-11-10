@@ -6,4 +6,4 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
-midly = "0.5"
+midly = { version = "0.5", default-features = false, features = ["std"] }

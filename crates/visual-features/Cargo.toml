@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
-image = { version = "0.25", features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 palette = "0.7"
-imageproc = "0.25"
+imageproc = { version = "0.25", default-features = false }
 serde = { version="1", features=["derive"] }

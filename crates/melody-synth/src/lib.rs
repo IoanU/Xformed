@@ -1,5 +1,3 @@
-
-
 use anyhow::{anyhow, Result};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use melody_core::{MonophonicMidi, ScaleKind};
@@ -8,8 +6,8 @@ use std::f32::consts::PI;
 use std::io::Cursor;
 
 /* =========================
-   Public types & API
-   ========================= */
+Public types & API
+========================= */
 
 #[derive(Clone, Copy, Debug)]
 pub enum Osc {
@@ -63,16 +61,26 @@ pub fn render_wav_bytes(midi: &MonophonicMidi, sr: u32, primary: Osc) -> Result<
 }
 
 /// New API: full serious rendering with layering/polyphony/swing/humanize/percussion.
-pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StyleParams) -> Result<Vec<u8>> {
+pub fn render_wav_bytes_styled(
+    midi: &MonophonicMidi,
+    sr: u32,
+    style: &StyleParams,
+) -> Result<Vec<u8>> {
     if style.layering.is_empty() {
-        return Err(anyhow!("StyleParams.layering must contain at least one oscillator"));
+        return Err(anyhow!(
+            "StyleParams.layering must contain at least one oscillator"
+        ));
     }
 
+    anyhow::ensure!(
+        midi.tempo_bpm > 0 && sr > 0,
+        "tempo and sample rate must be positive"
+    );
     // 1) Collect note events from MIDI
     let mut events = collect_events(midi)?;
 
     // 2) Estimate tempo in BPM if not available elsewhere (used for drums & swing scale)
-    let bpm = estimate_bpm(&events).unwrap_or(120.0);
+    let bpm = midi.tempo_bpm as f32;
 
     // 3) Apply swing & humanize
     apply_swing_and_humanize(&mut events, style.swing, style.humanize, bpm);
@@ -106,9 +114,13 @@ pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StylePara
             // small gain variation in time (subtile pulsation)
             let g_time = 0.9 + 0.1 * ((ev.t_on * 1.3).sin()).abs();
             render_note(
-                &mut out, sr, f0, ev.t_on, ev.t_off,
+                &mut out,
+                sr,
+                f0,
+                ev.t_on,
+                ev.t_off,
                 (ev.velocity as f32 / 127.0) * spec.gain * g_time as f32,
-                spec.osc
+                spec.osc,
             );
         }
     }
@@ -126,8 +138,8 @@ pub fn render_wav_bytes_styled(midi: &MonophonicMidi, sr: u32, style: &StylePara
 }
 
 /* =========================
-   Internal: MIDI -> events
-   ========================= */
+Internal: MIDI -> events
+========================= */
 
 #[derive(Clone, Copy, Debug)]
 struct NoteEv {
@@ -144,12 +156,17 @@ fn collect_events(midi: &MonophonicMidi) -> Result<Vec<NoteEv>> {
     for n in midi.notes.iter() {
         let pitch: u8 = n.pitch;
         // converting to f32
-        let t_on: f32  = n.start as f32;
-        let t_off: f32 = n.end as f32;
+        let t_on: f32 = n.start * 60.0 / midi.tempo_bpm as f32;
+        let t_off: f32 = n.end * 60.0 / midi.tempo_bpm as f32;
         let velocity: u8 = n.velocity;
 
         if t_off > t_on {
-            evs.push(NoteEv { pitch, t_on, t_off, velocity });
+            evs.push(NoteEv {
+                pitch,
+                t_on,
+                t_off,
+                velocity,
+            });
         }
     }
 
@@ -159,29 +176,18 @@ fn collect_events(midi: &MonophonicMidi) -> Result<Vec<NoteEv>> {
     Ok(evs)
 }
 
-/// Estimate BPM from median note duration (very rough).
-fn estimate_bpm(evs: &[NoteEv]) -> Option<f32> {
-    if evs.is_empty() { return None; }
-    let mut ds: Vec<f32> = evs.iter().map(|e| e.t_off - e.t_on).collect();
-    ds.sort_by(|a,b| a.partial_cmp(b).unwrap());
-    let med = ds[ds.len()/2];
-    if med <= 0.0 { return None; }
-    // Assume the common case where durations ~ 0.5 beat (eighth notes)
-    let beats = med / 0.5;
-    let bpm = 60.0 * beats.max(0.1);
-    Some(bpm.clamp(50.0, 200.0))
-}
-
 fn calc_total_len(evs: &[NoteEv]) -> f32 {
     evs.iter().fold(0.0, |mx, e| mx.max(e.t_off))
 }
 
 /* =========================
-   Swing & Humanize
-   ========================= */
+Swing & Humanize
+========================= */
 
 fn apply_swing_and_humanize(evs: &mut [NoteEv], swing: f32, human: f32, bpm: f32) {
-    if evs.is_empty() { return; }
+    if evs.is_empty() {
+        return;
+    }
     let swing = swing.clamp(0.0, 0.35);
     let human = human.clamp(0.0, 0.4);
 
@@ -211,12 +217,14 @@ fn apply_swing_and_humanize(evs: &mut [NoteEv], swing: f32, human: f32, bpm: f32
 }
 
 /* =========================
-   Polyphony expansion
-   ========================= */
+Polyphony expansion
+========================= */
 
 fn expand_polyphony(evs: &mut Vec<NoteEv>, voices: usize, scale: ScaleKind) {
     let voices = voices.min(3).max(1);
-    if voices == 1 { return; }
+    if voices == 1 {
+        return;
+    }
 
     // Copy original events
     let base = evs.clone();
@@ -239,41 +247,53 @@ fn expand_polyphony(evs: &mut Vec<NoteEv>, voices: usize, scale: ScaleKind) {
     }
 
     // Sort by t_on to keep timeline reasonable
-    evs.sort_by(|a,b| a.t_on.partial_cmp(&b.t_on).unwrap());
+    evs.sort_by(|a, b| a.t_on.partial_cmp(&b.t_on).unwrap());
 }
 
 /* =========================
-   Layering (detune & gain)
-   ========================= */
+Layering (detune & gain)
+========================= */
 
 #[derive(Clone, Copy)]
-struct LayerSpec { osc: Osc, detune_cents: f32, gain: f32 }
+struct LayerSpec {
+    osc: Osc,
+    detune_cents: f32,
+    gain: f32,
+}
 
 fn layering_specs(list: &[Osc]) -> Vec<LayerSpec> {
     if list.is_empty() {
-        return vec![LayerSpec { osc: Osc::Saw, detune_cents: 0.0, gain: 1.0 }];
+        return vec![LayerSpec {
+            osc: Osc::Saw,
+            detune_cents: 0.0,
+            gain: 1.0,
+        }];
     }
     let mut specs = Vec::new();
     for (i, &osc) in list.iter().enumerate() {
         let (det, g) = match (osc, i) {
-            (Osc::Saw, 0)    => (  0.0, 0.70),
-            (Osc::Saw, 1)    => (  7.0, 0.20),
-            (Osc::Saw, _)    => ( -4.0, 0.10),
-            (Osc::Square, 0) => (  0.0, 0.70),
-            (Osc::Square, 1) => (  5.0, 0.20),
-            (Osc::Square, _) => ( -5.0, 0.10),
-            (Osc::Sine, 0)   => (  0.0, 0.80),
-            (Osc::Sine, 1)   => ( 12.0, 0.15), // octave up hint
-            (Osc::Sine, _)   => (  4.0, 0.05),
+            (Osc::Saw, 0) => (0.0, 0.70),
+            (Osc::Saw, 1) => (7.0, 0.20),
+            (Osc::Saw, _) => (-4.0, 0.10),
+            (Osc::Square, 0) => (0.0, 0.70),
+            (Osc::Square, 1) => (5.0, 0.20),
+            (Osc::Square, _) => (-5.0, 0.10),
+            (Osc::Sine, 0) => (0.0, 0.80),
+            (Osc::Sine, 1) => (12.0, 0.15), // octave up hint
+            (Osc::Sine, _) => (4.0, 0.05),
         };
-        specs.push(LayerSpec { osc, detune_cents: det, gain: g });
+        specs.push(LayerSpec {
+            osc,
+            detune_cents: det,
+            gain: g,
+        });
     }
     specs
 }
 
 /* =========================
-   Rendering: oscillators & notes
-   ========================= */
+Rendering: oscillators & notes
+========================= */
 
 fn midi_pitch_to_hz(p: u8) -> f32 {
     440.0 * 2f32.powf((p as f32 - 69.0) / 12.0)
@@ -287,7 +307,13 @@ fn osc_sample(osc: Osc, phase: f32) -> f32 {
     match osc {
         Osc::Sine => (2.0 * PI * phase).sin(),
         Osc::Saw => 2.0 * (phase.fract()) - 1.0,
-        Osc::Square => if (phase.fract()) < 0.5 { 1.0 } else { -1.0 },
+        Osc::Square => {
+            if (phase.fract()) < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
     }
 }
 
@@ -301,11 +327,15 @@ fn ad_env(rel: f32) -> f32 {
 }
 
 fn render_note(out: &mut [f32], sr: u32, f0: f32, t_on: f32, t_off: f32, gain: f32, osc: Osc) {
-    if t_off <= t_on { return; }
+    if t_off <= t_on {
+        return;
+    }
     let sr_f = sr as f32;
     let start = (t_on * sr_f).max(0.0) as usize;
     let end = ((t_off * sr_f) as usize).min(out.len());
-    if end <= start { return; }
+    if end <= start {
+        return;
+    }
 
     let mut phase = 0.0f32;
     let inc = f0 / sr_f;
@@ -317,13 +347,15 @@ fn render_note(out: &mut [f32], sr: u32, f0: f32, t_on: f32, t_off: f32, gain: f
         let s = osc_sample(osc, phase) * env * gain;
         out[i] += s;
         phase += inc;
-        if phase >= 1.0 { phase -= 1.0; }
+        if phase >= 1.0 {
+            phase -= 1.0;
+        }
     }
 }
 
 /* =========================
-   Drums: kick/snare/hat
-   ========================= */
+Drums: kick/snare/hat
+========================= */
 
 fn render_drums(out: &mut [f32], sr: u32, bpm: f32) {
     let sr_f = sr as f32;
@@ -358,7 +390,9 @@ fn render_drums(out: &mut [f32], sr: u32, bpm: f32) {
 fn render_kick(out: &mut [f32], sr: u32, t_on: f32, dur: f32, start_hz: f32, end_hz: f32) {
     let start = (t_on * sr as f32) as usize;
     let end = ((t_on + dur) * sr as f32) as usize;
-    if end <= start || end > out.len() { return; }
+    if end <= start || end > out.len() {
+        return;
+    }
     let mut phase = 0.0f32;
     for i in start..end {
         let rel = (i - start) as f32 / ((end - start) as f32);
@@ -375,7 +409,9 @@ fn render_snare(out: &mut [f32], sr: u32, t_on: f32, dur: f32, tone: f32) {
     // noise + short tone
     let start = (t_on * sr as f32) as usize;
     let end = ((t_on + dur) * sr as f32) as usize;
-    if end <= start || end > out.len() { return; }
+    if end <= start || end > out.len() {
+        return;
+    }
     let mut phase = 0.0f32;
     let inc = 220.0 / sr as f32;
     for i in start..end {
@@ -393,7 +429,9 @@ fn render_snare(out: &mut [f32], sr: u32, t_on: f32, dur: f32, tone: f32) {
 fn render_hat(out: &mut [f32], sr: u32, t_on: f32, dur: f32, gain: f32) {
     let start = (t_on * sr as f32) as usize;
     let end = ((t_on + dur) * sr as f32) as usize;
-    if end <= start || end > out.len() { return; }
+    if end <= start || end > out.len() {
+        return;
+    }
     // bright noise with HP-ish response
     for i in start..end {
         let rel = (i - start) as f32 / ((end - start) as f32);
@@ -406,15 +444,19 @@ fn render_hat(out: &mut [f32], sr: u32, t_on: f32, dur: f32, gain: f32) {
 }
 
 /* =========================
-   Utils: normalize & WAV writer
-   ========================= */
+Utils: normalize & WAV writer
+========================= */
 
 fn normalize_soft(buf: &mut [f32], target_peak: f32) {
     let mut peak = 0.0f32;
-    for &x in buf.iter() { peak = peak.max(x.abs()); }
+    for &x in buf.iter() {
+        peak = peak.max(x.abs());
+    }
     if peak > target_peak && peak > 1e-9 {
         let k = target_peak / peak;
-        for x in buf.iter_mut() { *x *= k; }
+        for x in buf.iter_mut() {
+            *x *= k;
+        }
     }
 }
 
@@ -440,8 +482,8 @@ fn write_wav_i16(buf: &[f32], sr: u32) -> Result<Vec<u8>> {
 }
 
 /* =========================
-   Tiny PRNG (deterministic but simple)
-   ========================= */
+Tiny PRNG (deterministic but simple)
+========================= */
 
 fn rand_hash(mut x: u64) -> f32 {
     // xorshift-ish
@@ -450,3 +492,10 @@ fn rand_hash(mut x: u64) -> f32 {
     x ^= x >> 27;
     ((x.wrapping_mul(0x2545F4914F6CDD1D) >> 33) as f32) / (u32::MAX as f32)
 }
+
+pub mod arrangement;
+pub mod orchestra;
+pub use arrangement::arrange;
+pub use orchestra::render_composition;
+
+pub use arrangement::arrange_seeded;

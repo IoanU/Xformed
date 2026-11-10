@@ -8,13 +8,8 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 palette = "0.7"
-
-# only used if running API section (services/api)
-axum = "0.7"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tracing = "0.1"
 
 # local crates
 melody-core   = { path = "../melody-core" }
@@ -22,3 +17,4 @@ melody-synth  = { path = "../melody-synth" }
 audio-features = { path = "../audio-features" }
 visual-features = { path = "../visual-features" }
 text-features   = { path = "../text-features" }
+rustfft = "6"
