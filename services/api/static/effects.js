@@ -77,6 +77,22 @@
       });
     }
   }
+  function layoutRoute() {
+    // Match SVG units to CSS pixels so labels stay readable at every viewport width.
+    const width = Math.max(160, routeMap.getBoundingClientRect().width);
+    routeMap.setAttribute('viewBox', `0 0 ${width} 88`);
+    const sockets = { text: 0, image: 1, audio: 2, json: 3 };
+    const x = kind => 32 + sockets[kind] * (width - 64) / 3;
+    routeMap.querySelectorAll('[data-route-port]').forEach(port => {
+      port.setAttribute('transform', `translate(${x(port.dataset.routePort)} 32)`);
+    });
+    routeMap.querySelector('.route-grid').setAttribute('d', `M32 32H${width - 32}`);
+    const direction = Math.sign(x(to) - x(from));
+    const start = x(from) + direction * 12;
+    const end = x(to) - direction * 14;
+    routePath.setAttribute('d', `M${start} 32Q${(start + end) / 2} 3 ${end} 32`);
+    animateRoute();
+  }
   function setRoute(source, destination) {
     from = source; to = destination; completed = false;
     canvas.dataset.complete = 'false';
@@ -89,15 +105,13 @@
     canvas.setAttribute('aria-label', `${names[from]} transforming into ${names[to]}`);
     document.getElementById('morph-from').textContent = names[from];
     document.getElementById('morph-to').textContent = names[to];
-    document.getElementById('route-code').textContent = `${{ text: 'T', image: 'I', audio: 'A' }[from]} → ${{ text: 'T', image: 'I', audio: 'A', json: 'D' }[to]}`;
+    const destinationName = { text: 'Writing', image: 'Artwork', audio: 'Music', json: 'Analysis' }[to];
+    document.getElementById('route-code').textContent = `${names[from]} → ${destinationName}`;
     routeMap.querySelectorAll('[data-route-port]').forEach(port => {
       port.classList.toggle('is-source', port.dataset.routePort === from);
       port.classList.toggle('is-target', port.dataset.routePort === to);
     });
-    const ports = { text: [90, 25], image: [24, 186], audio: [156, 186], json: [90, 115] };
-    const a = ports[from], b = ports[to];
-    routePath.setAttribute('d', `M${a[0]} ${a[1]} Q${90 + (a[0] - b[0]) * .13} 109 ${b[0]} ${b[1]}`);
-    animateRoute(); animateField(); paint(0);
+    layoutRoute(); animateField(); paint(0);
   }
   function result(response, context) {
     const writing = response.artifacts.find(a => a.type === 'Text');
@@ -243,6 +257,7 @@
     stage.style.setProperty('--tilt-x', '0deg'); stage.style.setProperty('--tilt-y', '0deg');
   });
   new ResizeObserver(resize).observe(canvas.parentElement);
+  new ResizeObserver(layoutRoute).observe(routeMap);
   resize(); preference();
   window.XformedEffects = {
     route: setRoute, source: updateSource, result, mood() {},
