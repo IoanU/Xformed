@@ -17,18 +17,22 @@
   const mediaSources = new WeakMap();
   const luminance = { source: null, result: null };
   const textLines = { source: [' '], result: [' '] };
-  let from = 'text', to = 'audio', enabled = true, busy = false, completed = false;
+  let from = 'text', to = 'audio', enabled = !mq.matches, busy = false, completed = false;
   let sourceSeed = 1, resultSeed = 2, sourceText = '', resultText = '', dataValues = [];
   let fieldAnimation, routeAnimation, revealAnimation, frame = null, lastFrame = 0;
   let audioContext, analyser, wave, frequency, level = 0;
-  try { enabled = localStorage.getItem('xformed-motion') !== 'off'; } catch {}
+  // The system preference supplies only the default; an explicit choice wins.
+  try {
+    const saved = localStorage.getItem('xformed-motion');
+    if (saved === 'on' || saved === 'off') enabled = saved === 'on';
+  } catch {}
 
   function hash(value) {
     let h = 2166136261;
     for (const c of value) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
     return h >>> 0;
   }
-  function active() { return enabled && !mq.matches && !document.hidden; }
+  function active() { return enabled && !document.hidden; }
   function stop(animation) { animation?.revert(); }
   function resize() {
     const r = canvas.getBoundingClientRect(), d = Math.min(devicePixelRatio || 1, 2);
@@ -235,7 +239,8 @@
     lastFrame = now; paint(now / 1000);
   }
   function preference() {
-    const motion = enabled && !mq.matches;
+    const motion = enabled;
+    document.body.classList.toggle('motion-on', motion);
     document.body.classList.toggle('motion-off', !motion);
     const toggle = document.getElementById('motion');
     toggle.textContent = motion ? 'Motion on' : 'Motion off';
@@ -252,7 +257,6 @@
     try { localStorage.setItem('xformed-motion', enabled ? 'on' : 'off'); } catch {}
     preference();
   };
-  mq.addEventListener('change', preference);
   document.addEventListener('visibilitychange', preference);
   stage.addEventListener('pointermove', event => {
     if (!active() || event.pointerType === 'touch') return;
